@@ -1,0 +1,8 @@
+# One public, embeddable SoundCloud track or playlist URL per line.
+# Replace these examples with your approved rotation.
+https://soundcloud.com/monstercat/sets/monstercat-instinct
+https://soundcloud.com/forrestfrank/your-ways-better?utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing
+https://on.soundcloud.com/HPdMOGkf6kvseBjQbi
+https://soundcloud.com/josiahqueen/cant-steal-my-joy-feat-brandon?in=josiahqueen/sets/mt-zion-2&utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing
+https://soundcloud.com/brice-davis-music/who-will-save-me?utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing
+https://soundcloud.com/brice-davis-music/joseph-acoustic?utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing
