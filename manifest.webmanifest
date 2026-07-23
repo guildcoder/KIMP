@@ -1,0 +1,253 @@
+const CONFIG = {
+  songsFile: 'songs.txt',
+  adsFile: 'ads.txt',
+  songsBetweenAdsMin: 3,
+  songsBetweenAdsMax: 5,
+  crossfadeMs: 900,
+  defaultVolume: 78,
+};
+
+const els = {
+  iframe: document.querySelector('#soundcloudPlayer'),
+  ad: document.querySelector('#adPlayer'),
+  play: document.querySelector('#playButton'),
+  playIcon: document.querySelector('.play-icon'),
+  playCopy: document.querySelector('.button-copy'),
+  skip: document.querySelector('#skipButton'),
+  volume: document.querySelector('#volumeSlider'),
+  now: document.querySelector('#nowPlaying'),
+  source: document.querySelector('#sourceLabel'),
+  signal: document.querySelector('#signalText'),
+  queue: document.querySelector('#queueStatus'),
+  progress: document.querySelector('#progressBar'),
+  elapsed: document.querySelector('#elapsed'),
+  duration: document.querySelector('#duration'),
+  lamp: document.querySelector('#onAirLamp'),
+  needle: document.querySelector('#dialNeedle'),
+};
+
+let widget;
+let songs = [];
+let ads = [];
+let songBag = [];
+let adBag = [];
+let activeType = null;
+let activeItem = null;
+let playing = false;
+let initialized = false;
+let transitioning = false;
+let tracksUntilAd = randomInt(CONFIG.songsBetweenAdsMin, CONFIG.songsBetweenAdsMax);
+let currentDurationMs = 0;
+
+async function loadList(path) {
+  const response = await fetch(`${path}?v=${Date.now()}`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Could not load ${path}`);
+  const text = await response.text();
+  return text.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+}
+
+async function boot() {
+  try {
+    [songs, ads] = await Promise.all([loadList(CONFIG.songsFile), loadList(CONFIG.adsFile)]);
+    if (!songs.length) throw new Error('songs.txt has no SoundCloud URLs.');
+    resetSongBag(); resetAdBag();
+    els.queue.textContent = `${songs.length} CUTS · ${ads.length} SPOTS IN ROTATION`;
+    els.signal.textContent = 'SIGNAL 100%';
+  } catch (error) {
+    console.error(error);
+    els.now.textContent = error.message.toUpperCase();
+    els.queue.textContent = 'CHECK STATION FILES';
+    els.play.disabled = true;
+  }
+}
+
+function resetSongBag() { songBag = shuffle([...songs]); }
+function resetAdBag() { adBag = shuffle([...ads]); }
+function nextSong() { if (!songBag.length) resetSongBag(); return songBag.pop(); }
+function nextAd() { if (!adBag.length) resetAdBag(); return adBag.pop(); }
+
+function randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+function formatTime(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '0:00';
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+function filenameTitle(path) {
+  return decodeURIComponent(path.split('/').pop().replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' '));
+}
+
+function setPlayingUI(value) {
+  playing = value;
+  els.play.classList.toggle('playing', value);
+  els.lamp.classList.toggle('active', value);
+  els.playIcon.textContent = value ? 'Ⅱ' : '▶';
+  els.playCopy.textContent = value ? 'SIGNAL LIVE' : 'TUNE IN';
+}
+
+async function initializeAudio() {
+  if (initialized) return;
+  initialized = true;
+  els.iframe.src = `https://w.soundcloud.com/player/?url=${encodeURIComponent(songs[0])}&auto_play=false&hide_related=true&show_comments=false&show_user=false&show_reposts=false&visual=false`;
+  widget = SC.Widget(els.iframe);
+  widget.bind(SC.Widget.Events.READY, () => {
+    widget.setVolume(Number(els.volume.value));
+    widget.bind(SC.Widget.Events.FINISH, () => advance());
+    widget.bind(SC.Widget.Events.PLAY_PROGRESS, data => updateProgress(data.currentPosition, currentDurationMs));
+    widget.bind(SC.Widget.Events.PLAY, () => setPlayingUI(true));
+    widget.bind(SC.Widget.Events.PAUSE, () => { if (!transitioning && activeType === 'song') setPlayingUI(false); });
+  });
+  els.ad.volume = Number(els.volume.value) / 100;
+  els.ad.addEventListener('timeupdate', () => updateProgress(els.ad.currentTime * 1000, els.ad.duration * 1000));
+  els.ad.addEventListener('ended', () => advance());
+  els.ad.addEventListener('play', () => setPlayingUI(true));
+  els.ad.addEventListener('pause', () => { if (!transitioning && activeType === 'ad') setPlayingUI(false); });
+  await new Promise(resolve => setTimeout(resolve, 350));
+}
+
+async function playSong(url) {
+  transitioning = true;
+  activeType = 'song'; activeItem = url;
+  els.ad.pause(); els.ad.removeAttribute('src');
+  els.source.textContent = 'KIMP MUSIC ROTATION';
+  els.now.textContent = 'TUNING SOUNDCloud FREQUENCY…';
+  els.needle.style.left = `${randomInt(15, 88)}%`;
+  currentDurationMs = 0;
+  updateProgress(0, 0);
+
+  widget.load(url, {
+    auto_play: true,
+    hide_related: true,
+    show_comments: false,
+    show_user: false,
+    show_reposts: false,
+    visual: false,
+  });
+
+  setTimeout(() => {
+    widget.getCurrentSound(sound => {
+      const title = sound?.title || 'UNKNOWN TRANSMISSION';
+      const artist = sound?.user?.username || 'KIMP ROTATION';
+      currentDurationMs = sound?.duration || 0;
+      els.now.textContent = `${artist} — ${title}`.toUpperCase();
+      els.duration.textContent = formatTime(currentDurationMs);
+      setMediaMetadata(title, artist, 'KIMP Radio');
+    });
+    widget.setVolume(Number(els.volume.value));
+    transitioning = false;
+  }, 700);
+}
+
+async function playAd(path) {
+  transitioning = true;
+  activeType = 'ad'; activeItem = path;
+  if (widget) widget.pause();
+  els.source.textContent = 'PAID TRANSMISSION';
+  const title = filenameTitle(path);
+  els.now.textContent = `KIMP SPONSOR MESSAGE — ${title}`.toUpperCase();
+  els.needle.style.left = `${randomInt(8, 25)}%`;
+  els.ad.src = path;
+  els.ad.volume = Number(els.volume.value) / 100;
+  setMediaMetadata(title, 'KIMP Sponsor Desk', 'Paid Transmission');
+  try {
+    await els.ad.play();
+    transitioning = false;
+  } catch (error) {
+    console.error('Ad playback failed', error);
+    transitioning = false;
+    advance();
+  }
+}
+
+async function advance({ forceSong = false } = {}) {
+  if (transitioning) return;
+  transitioning = true;
+  await fadeOutActive();
+
+  const shouldPlayAd = !forceSong && ads.length > 0 && tracksUntilAd <= 0;
+  if (shouldPlayAd) {
+    tracksUntilAd = randomInt(CONFIG.songsBetweenAdsMin, CONFIG.songsBetweenAdsMax);
+    transitioning = false;
+    return playAd(nextAd());
+  }
+
+  tracksUntilAd -= 1;
+  transitioning = false;
+  return playSong(nextSong());
+}
+
+async function fadeOutActive() {
+  const steps = 9;
+  const delay = CONFIG.crossfadeMs / steps;
+  const target = Number(els.volume.value);
+  for (let i = steps; i >= 0; i--) {
+    const scaled = target * (i / steps);
+    if (activeType === 'song' && widget) widget.setVolume(scaled);
+    if (activeType === 'ad') els.ad.volume = scaled / 100;
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+  if (activeType === 'song' && widget) widget.pause();
+  if (activeType === 'ad') els.ad.pause();
+}
+
+function updateProgress(positionMs, durationMs) {
+  const duration = Number.isFinite(durationMs) ? durationMs : 0;
+  const pct = duration > 0 ? Math.min(100, (positionMs / duration) * 100) : 0;
+  els.progress.style.width = `${pct}%`;
+  els.elapsed.textContent = formatTime(positionMs);
+  els.duration.textContent = duration > 0 ? formatTime(duration) : '--:--';
+}
+
+function setMediaMetadata(title, artist, album) {
+  if (!('mediaSession' in navigator) || !('MediaMetadata' in window)) return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title, artist, album,
+    artwork: [
+      { src: 'assets/icon.svg', sizes: '512x512', type: 'image/svg+xml' }
+    ]
+  });
+  navigator.mediaSession.playbackState = 'playing';
+}
+
+async function togglePlayback() {
+  await initializeAudio();
+  if (!activeItem) return advance({ forceSong: true });
+  if (playing) {
+    if (activeType === 'song') widget.pause(); else els.ad.pause();
+    setPlayingUI(false);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+  } else {
+    if (activeType === 'song') widget.play(); else await els.ad.play();
+    setPlayingUI(true);
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+  }
+}
+
+els.play.addEventListener('click', togglePlayback);
+els.skip.addEventListener('click', async () => { await initializeAudio(); advance({ forceSong: activeType === 'ad' }); });
+els.volume.addEventListener('input', () => {
+  const value = Number(els.volume.value);
+  if (widget) widget.setVolume(value);
+  els.ad.volume = value / 100;
+});
+
+document.addEventListener('visibilitychange', () => {
+  // Do not pause when hidden; this preserves background playback where the browser permits it.
+});
+
+if ('mediaSession' in navigator) {
+  try {
+    navigator.mediaSession.setActionHandler('play', togglePlayback);
+    navigator.mediaSession.setActionHandler('pause', togglePlayback);
+    navigator.mediaSession.setActionHandler('nexttrack', () => advance());
+  } catch (error) { console.debug('Media Session controls partially unsupported.', error); }
+}
+
+if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+boot();
